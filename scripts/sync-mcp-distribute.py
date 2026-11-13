@@ -1,184 +1,230 @@
 #!/usr/bin/env python3
 # sync-mcp-distribute - Distribute MCP server definitions to all agent configs
+#
+# Safety rules (learned the hard way):
+#   1. NEVER overwrite an entry that already exists. Existing agent config is
+#      the source of truth for that agent; this script only ADDS missing servers.
+#   2. Preserve every key already present (url, headers, oauth, enabled, type...).
+#   3. Back up each file before writing.
+#   4. Refuse to write a server that has neither url nor command.
+#
 # Usage: sync-mcp-distribute.py [server_name]
-#   no arg -> distribute all servers
-#   arg    -> distribute only that server
+#   no arg -> add any missing servers
+#   arg    -> add only that server
 
 import json
 import os
 import re
+import shutil
 import sys
+import time
 
 REPO_DIR = "/home/perez/projetos/ai-tools"
 INPUT_FILE = os.path.join(REPO_DIR, "mcp", "servers.json")
 
+
 def load_servers():
     with open(INPUT_FILE, "r") as f:
         return json.load(f)
+
 
 def filter_server(servers, name):
     if name:
         return {name: servers[name]} if name in servers else {}
     return servers
 
+
+def backup(path):
+    dst = f"{path}.bak.{int(time.time())}"
+    shutil.copy2(path, dst)
+    print(f"  backup: {dst}")
+
+
+def is_valid(config):
+    """A server needs somewhere to connect: a URL or a command."""
+    return bool(config.get("url") or config.get("command"))
+
+
 def distribute_opencode(servers):
     path = os.path.expanduser("~/.config/opencode/opencode.jsonc")
     if not os.path.exists(path):
         print(f"Error: {path} not found")
         return False
-    
+
     with open(path, "r") as f:
         content = f.read()
-    
+
     try:
         import json5
         data = json5.loads(content)
     except ImportError:
-        content = re.sub(r"//.*", "", content)
-        content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-        data = json.loads(content)
-    
-    if "mcp" not in data:
-        data["mcp"] = {}
-    
+        stripped = re.sub(r"//.*", "", content)
+        stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
+        data = json.loads(stripped)
+
+    existing = data.get("mcp", {})
+    added, skipped = [], []
+
     for name, config in servers.items():
-        if "url" not in config and "command" not in config:
+        if name in existing:
+            skipped.append(name)
             continue
-        mcp_config = {
-            "type": config.get("type", "remote"),
-            "enabled": config.get("enabled", True),
-            "source": "opencode",
-        }
-        if "headers" in config:
-            mcp_config["headers"] = config["headers"]
-        if "oauth" in config:
-            mcp_config["oauth"] = config["oauth"]
-        data["mcp"][name] = mcp_config
-    
+        if not is_valid(config):
+            print(f"  skip {name}: no url or command in servers.json")
+            continue
+        # Build from the source entry, keeping only keys that belong in opencode.
+        entry = {}
+        if config.get("url"):
+            entry["type"] = config.get("type", "remote")
+            entry["url"] = config["url"]
+        else:
+            entry["type"] = "local"
+            entry["command"] = config["command"]
+            if config.get("args"):
+                entry["args"] = config["args"]
+        entry["enabled"] = config.get("enabled", True)
+        if config.get("headers"):
+            entry["headers"] = config["headers"]
+        if config.get("oauth") is not None:
+            entry["oauth"] = config["oauth"]
+        existing[name] = entry
+        added.append(name)
+
+    data["mcp"] = existing
+
+    if not added:
+        print(f"OpenCode: nothing to add ({len(skipped)} already present)")
+        return True
+
+    backup(path)
     try:
         import json5
         output = json5.dumps(data, indent=2, quote_keys=True)
     except ImportError:
         output = json.dumps(data, indent=2)
-    
+
     with open(path, "w") as f:
         f.write(output)
-    
-    print(f"Updated opencode: {path}")
+
+    print(f"OpenCode: added {', '.join(added)}")
+    if skipped:
+        print(f"OpenCode: left untouched {', '.join(skipped)}")
     return True
+
 
 def distribute_claude(servers):
     path = os.path.expanduser("~/.claude.json")
     if not os.path.exists(path):
         print(f"Error: {path} not found")
         return False
-    
+
     with open(path, "r") as f:
         data = json.load(f)
-    
-    if "mcpServers" not in data:
-        data["mcpServers"] = {}
-    
+
+    existing = data.get("mcpServers", {})
+    added, skipped = [], []
+
     for name, config in servers.items():
-        if "url" not in config:
+        if name in existing:
+            skipped.append(name)
             continue
-        mcp_config = {
+        if not config.get("url"):
+            print(f"  skip {name}: no url (Claude remote servers need one)")
+            continue
+        existing[name] = {
             "type": config.get("type", "http"),
             "url": config["url"],
         }
-        if "headers" in config:
-            mcp_config["headers"] = config["headers"]
-        if "oauth" in config:
-            mcp_config["oauth"] = config["oauth"]
-        data["mcpServers"][name] = mcp_config
-    
+        added.append(name)
+
+    data["mcpServers"] = existing
+
+    if not added:
+        print(f"Claude: nothing to add ({len(skipped)} already present)")
+        return True
+
+    backup(path)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
-    
-    print(f"Updated claude: {path}")
+
+    print(f"Claude: added {', '.join(added)}")
+    if skipped:
+        print(f"Claude: left untouched {', '.join(skipped)}")
     return True
+
 
 def distribute_codex(servers):
     path = os.path.expanduser("~/.codex/config.toml")
     if not os.path.exists(path):
         print(f"Error: {path} not found")
         return False
-    
+
     with open(path, "r") as f:
         content = f.read()
-    
+
     existing_servers = set()
     for match in re.finditer(r"\[mcp_servers\.([^.\]]+)\]", content):
         existing_servers.add(match.group(1))
-    
-    servers_to_add = {
+
+    to_add = {
         name: config
         for name, config in servers.items()
-        if ("url" in config or "command" in config) and name not in existing_servers
+        if is_valid(config) and name not in existing_servers
     }
-    
-    if not servers_to_add:
-        print(f"Codex: no new servers to add")
+
+    if not to_add:
+        print(f"Codex: nothing to add ({len(existing_servers)} already present)")
         return True
-    
+
     lines = content.split("\n")
     last_mcp_idx = -1
     for i, line in enumerate(lines):
         if line.strip().startswith("[mcp_servers"):
             last_mcp_idx = i
-    
+
+    block = []
+    for name, config in to_add.items():
+        block.append(f"[mcp_servers.{name}]")
+        if config.get("url"):
+            block.append(f'url = "{config["url"]}"')
+        else:
+            block.append(f'command = "{config["command"]}"')
+            if config.get("args"):
+                block.append(f"args = {json.dumps(config['args'])}")
+        if config.get("type"):
+            block.append(f'type = "{config["type"]}"')
+        if config.get("bearer_token_env_var"):
+            block.append(
+                f'bearer_token_env_var = "{config["bearer_token_env_var"]}"'
+            )
+
     if last_mcp_idx < 0:
-        new_lines = lines + [""]
-        for name, config in servers_to_add.items():
-            new_lines.append(f"[mcp_servers.{name}]")
-            if "url" in config:
-                new_lines.append(f'url = "{config["url"]}"')
-            if "command" in config:
-                new_lines.append(f'command = "{config["command"]}"')
-            if "args" in config:
-                new_lines.append(f"args = {json.dumps(config['args'])}")
-            if "type" in config:
-                new_lines.append(f'type = "{config["type"]}"')
-            if "bearer_token_env_var" in config:
-                new_lines.append(
-                    f'bearer_token_env_var = "{config["bearer_token_env_var"]}"'
-                )
+        new_lines = lines + [""] + block
     else:
-        new_lines = lines[: last_mcp_idx + 1]
-        for name, config in servers_to_add.items():
-            new_lines.append(f"[mcp_servers.{name}]")
-            if "url" in config:
-                new_lines.append(f'url = "{config["url"]}"')
-            if "command" in config:
-                new_lines.append(f'command = "{config["command"]}"')
-            if "args" in config:
-                new_lines.append(f"args = {json.dumps(config['args'])}")
-            if "type" in config:
-                new_lines.append(f'type = "{config["type"]}"')
-            if "bearer_token_env_var" in config:
-                new_lines.append(
-                    f'bearer_token_env_var = "{config["bearer_token_env_var"]}"'
-                )
-        new_lines.extend(lines[last_mcp_idx + 1:])
-    
+        new_lines = lines[: last_mcp_idx + 1] + block + lines[last_mcp_idx + 1:]
+
+    backup(path)
     with open(path, "w") as f:
         f.write("\n".join(new_lines))
-    
-    added = ", ".join(servers_to_add.keys())
-    print(f"Updated codex: {path} (added: {added})")
+
+    print(f"Codex: added {', '.join(to_add.keys())}")
     return True
+
 
 def main():
     server_name = sys.argv[1] if len(sys.argv) > 1 else None
     servers = filter_server(load_servers(), server_name)
-    
-    print("Distributing MCP servers to all agents...")
-    
+
+    if not servers:
+        print("No matching servers in mcp/servers.json")
+        return
+
+    print("Distributing MCP servers (add-only, never overwrites)...")
     distribute_opencode(servers)
     distribute_claude(servers)
     distribute_codex(servers)
-    
-    print("\nDistribution complete!")
+    print("\nDistribution complete.")
+
 
 if __name__ == "__main__":
     main()
