@@ -1,0 +1,5 @@
+# Generated skill cache (pulled from anthropic-example, has its own manifest)
+skills/synced/
+
+# Local backups written by scripts/sync-mcp-*.py
+*.bak.*
