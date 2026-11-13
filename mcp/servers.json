@@ -1,0 +1,98 @@
+{
+  "github": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://api.githubcopilot.com/mcp/",
+    "type": "remote",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "neon": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://mcp.neon.tech/mcp",
+    "type": "remote",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "jira": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://mcp.atlassian.com/v1/mcp",
+    "type": "remote",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "vercel": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://mcp.vercel.com",
+    "type": "remote",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "render": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://mcp.render.com/mcp",
+    "type": "remote",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "futebol-api": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://futebol-mcp.orbisplace.co.uk/sse",
+    "type": "remote",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "posthog": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://mcp.posthog.com/mcp",
+    "type": "remote",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "atlassian": {
+    "source": "opencode",
+    "enabled": true,
+    "url": "https://mcp.atlassian.com/v1/mcp/authv2",
+    "type": "http",
+    "sources": [
+      "opencode",
+      "claude",
+      "codex"
+    ]
+  },
+  "playwright": {
+    "source": "opencode",
+    "enabled": true,
+    "sources": [
+      "opencode",
+      "codex"
+    ]
+  }
+}

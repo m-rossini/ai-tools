@@ -1,77 +1,209 @@
-#!/bin/bash
+#!/usr/bin/env python3
+"""ai-sync - Interactive REPL driver for skill and MCP sync operations.
 
-# ai-sync - Sync individual skill directories from repo to user-level ~/.claude/skills and ~/.codex/skills
-# Ensures symlinks exist without deleting existing skills not in repo.
+Sub-scripts (each has a specific task):
+  scripts/sync-skills.sh      [skill_name]   - Sync skill(s) to Claude, Codex, OpenCode
+  scripts/sync-mcp-collect.py - Collect MCP definitions from all agent configs
+  scripts/sync-mcp-distribute.py [server_name] - Distribute MCP server(s) to all agents
+"""
 
-REPO_SKILLS_DIR="/home/perez/projetos/ai-tools/skills"
-if [ ! -d "$REPO_SKILLS_DIR" ]; then
-  echo "Error: Repository skills directory not found at $REPO_SKILLS_DIR"
-  exit 1
-fi
+import json
+import os
+import subprocess
+import sys
 
-# Function to safely create or update a symlink
-safe_symlink() {
-  local src=$1
-  local dst=$2
-  if [ -L "$dst" ]; then
-    # It's a symlink, check if points to correct source
-    local current=$(readlink "$dst" 2>/dev/null || echo "")
-    if [ "$current" = "$src" ]; then
-      # already correct
-      return 0
-    else
-      # points elsewhere, replace
-      rm -f "$dst"
-      ln -sf "$src" "$dst"
-    fi
-  elif [ -e "$dst" ]; then
-    # exists but not a symlink; skip to avoid overwriting
-    echo "Warning: $dst exists and is not a symlink; skipping"
-    return 1
-  else
-    # doesn't exist, create symlink
-    ln -sf "$src" "$dst"
-  fi
-}
+REPO_DIR = "/home/perez/projetos/ai-tools"
+SKILLS_DIR = os.path.join(REPO_DIR, "skills")
+MCP_FILE = os.path.join(REPO_DIR, "mcp", "servers.json")
 
-# Ensure user directories exist
-mkdir -p ~/.claude/skills
-mkdir -p ~/.codex/skills
 
-# AGENT.md symlink for Claude
-AGENT_REPO="$REPO_SKILLS_DIR/AGENT.md"
-AGENT_CLAUDE=~/.claude/AGENT.md
-if [ ! -L "$AGENT_CLAUDE" ]; then
-  ln -sf "$AGENT_REPO" "$AGENT_CLAUDE"
-elif [ -L "$AGENT_CLAUDE" ]; then
-  if [ "$(readlink "$AGENT_CLAUDE")" != "$AGENT_REPO" ]; then
-    rm -f "$AGENT_CLAUDE"
-    ln -sf "$AGENT_REPO" "$AGENT_CLAUDE"
-  fi
-fi
+def list_skills():
+    skills = []
+    if os.path.isdir(SKILLS_DIR):
+        for name in sorted(os.listdir(SKILLS_DIR)):
+            path = os.path.join(SKILLS_DIR, name)
+            if os.path.isdir(path) and name != "AGENT.md" and not name.startswith("."):
+                skills.append((name, path))
+    return skills
 
-# AGENT.md symlink for Codex
-AGENT_CLAUDEX=~/.codex/AGENT.md
-if [ ! -L "$AGENT_CLAUDEX" ]; then
-  ln -sf "$AGENT_REPO" "$AGENT_CLAUDEX"
-elif [ -L "$AGENT_CLAUDEX" ]; then
-  if [ "$(readlink "$AGENT_CLAUDEX")" != "$AGENT_REPO" ]; then
-    rm -f "$AGENT_CLAUDEX"
-    ln -sf "$AGENT_REPO" "$AGENT_CLAUDEX"
-  fi
-fi
 
-# Loop over each skill directory in repo
-for skill_dir in "$REPO_SKILLS_DIR"/*; do
-  # Skip if not a directory
-  [ -d "$skill_dir" ] || continue
-  skill_name=$(basename "$skill_dir")
-  # Skip if it's AGENT.md (already handled)
-  [ "$skill_name" = "AGENT.md" ] && continue
+def list_mcp_servers():
+    if not os.path.exists(MCP_FILE):
+        return []
+    with open(MCP_FILE, "r") as f:
+        data = json.load(f)
+    return [(name, config) for name, config in data.items() if name != "sources"]
 
-  # Create symlinks for both user directories
-  safe_symlink "$skill_dir" ~/.claude/skills/"$skill_name"
-  safe_symlink "$skill_dir" ~/.codex/skills/"$skill_name"
-done
 
-echo "Sync complete."
+def skill_status(name):
+    """Return (claude, codex, opencode) booleans - True if skill dir exists."""
+    paths = [
+        os.path.expanduser(f"~/.claude/skills/{name}"),
+        os.path.expanduser(f"~/.codex/skills/{name}"),
+        os.path.expanduser(f"~/.config/opencode/skills/{name}"),
+    ]
+    return tuple(os.path.isdir(p) for p in paths)
+
+
+def mcp_status(name):
+    """Return (opencode, claude, codex) booleans - True if MCP server present."""
+    import json5
+
+    opencode = claude = codex = False
+
+    opencode_path = os.path.expanduser("~/.config/opencode/opencode.jsonc")
+    if os.path.exists(opencode_path):
+        with open(opencode_path, "r") as f:
+            data = json5.load(f)
+        if name in data.get("mcp", {}):
+            opencode = True
+
+    claude_path = os.path.expanduser("~/.claude.json")
+    if os.path.exists(claude_path):
+        with open(claude_path, "r") as f:
+            data = json.load(f)
+        if name in data.get("mcpServers", {}):
+            claude = True
+
+    codex_path = os.path.expanduser("~/.codex/config.toml")
+    if os.path.exists(codex_path):
+        with open(codex_path, "r") as f:
+            content = f.read()
+        if f"[mcp_servers.{name}]" in content:
+            codex = True
+
+    return opencode, claude, codex
+
+
+def ask_interactive_or_not():
+    """First question: interactive or non-interactive mode."""
+    print("Interactive mode? (interactive / non-interactive)")
+    try:
+        line = sys.stdin.readline()
+    except EOFError:
+        return False
+    if not line:
+        return False
+    answer = line.strip().lower()
+    return answer != "non-interactive"
+
+
+def run_full_sync():
+    print("Non-interactive mode: running full sync...")
+    subprocess.run(
+        ["bash", os.path.join(REPO_DIR, "scripts", "sync-skills.sh")], check=True
+    )
+    subprocess.run(
+        [sys.executable, os.path.join(REPO_DIR, "scripts", "sync-mcp-collect.py")],
+        check=True,
+    )
+    subprocess.run(
+        [sys.executable, os.path.join(REPO_DIR, "scripts", "sync-mcp-distribute.py")],
+        check=True,
+    )
+    print("Full sync complete!")
+
+
+def run_interactive():
+    while True:
+        total_skills = len(list_skills())
+        total_mcp = len(list_mcp_servers())
+        total = total_skills + total_mcp
+
+        print("\n" + "=" * 60)
+        print("AI-SYNC INTERACTIVE")
+        print("=" * 60)
+
+        print("\nSKILLS (choose a number to sync to all agents):")
+        print(f"{'#':<6} {'Name':<20} {'Claude':<10} {'Codex':<10} {'OpenCode':<10}")
+        print("-" * 60)
+        skills = list_skills()
+        for i, (name, _) in enumerate(skills, 1):
+            cl, cx, oc = skill_status(name)
+            cl_status = "✓" if cl else "✗"
+            cx_status = "✓" if cx else "✗"
+            oc_status = "✓" if oc else "✗"
+            print(f"{i:<6} {name:<20} {cl_status:<10} {cx_status:<10} {oc_status:<10}")
+
+        print("\nMCP SERVERS (choose a number to distribute to all agents):")
+        print(f"{'#':<6} {'Name':<20} {'Claude':<10} {'Codex':<10} {'OpenCode':<10}")
+        print("-" * 60)
+        mcp_servers = list_mcp_servers()
+        for i, (name, config) in enumerate(mcp_servers, total_skills + 1):
+            oc, cl, cx = mcp_status(name)
+            cl_status = "✓" if cl else "✗"
+            cx_status = "✓" if cx else "✗"
+            oc_status = "✓" if oc else "✗"
+            print(f"{i:<6} {name:<20} {cl_status:<10} {cx_status:<10} {oc_status:<10}")
+
+        print("\nCommands:")
+        print("  [a] Collect MCP definitions from all agents")
+        print("  [d] Distribute MCP definitions to all agents")
+        print("  [q] Quit")
+
+        try:
+            line = sys.stdin.readline()
+        except EOFError:
+            break
+        if not line:
+            break
+        choice = line.strip().lower()
+
+        if choice in ("q", "0"):
+            print("Exiting ai-sync.")
+            break
+        elif choice == "a":
+            print("\n[a] Collecting MCP definitions from all agents...")
+            subprocess.run(
+                [sys.executable, os.path.join(REPO_DIR, "scripts", "sync-mcp-collect.py")],
+                check=True,
+            )
+        elif choice == "d":
+            print("\n[d] Distributing MCP definitions to all agents...")
+            subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(REPO_DIR, "scripts", "sync-mcp-distribute.py"),
+                ],
+                check=True,
+            )
+        else:
+            try:
+                idx = int(choice)
+                skills = list_skills()
+                mcp_servers = list_mcp_servers()
+                if idx <= len(skills):
+                    name = skills[idx - 1][0]
+                    print(f"\nSyncing skill '{name}'...")
+                    subprocess.run(
+                        ["bash", os.path.join(REPO_DIR, "scripts", "sync-skills.sh"), name],
+                        check=True,
+                    )
+                elif idx <= len(skills) + len(mcp_servers):
+                    mcp_name = mcp_servers[idx - len(skills) - 1][0]
+                    print(f"\nDistributing MCP server '{mcp_name}'...")
+                    subprocess.run(
+                        [
+                            sys.executable,
+                            os.path.join(REPO_DIR, "scripts", "sync-mcp-distribute.py"),
+                        ],
+                        check=True,
+                    )
+                else:
+                    print("Invalid choice.")
+            except ValueError:
+                print("Invalid choice.")
+
+
+def main():
+    if "--non-interactive" in sys.argv:
+        run_full_sync()
+        return
+    if ask_interactive_or_not():
+        run_interactive()
+    else:
+        run_full_sync()
+
+
+if __name__ == "__main__":
+    main()
