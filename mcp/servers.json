@@ -21,17 +21,6 @@
       "codex"
     ]
   },
-  "jira": {
-    "source": "opencode",
-    "enabled": true,
-    "url": "https://mcp.atlassian.com/v1/mcp",
-    "type": "remote",
-    "sources": [
-      "opencode",
-      "claude",
-      "codex"
-    ]
-  },
   "vercel": {
     "source": "opencode",
     "enabled": true,
