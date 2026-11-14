@@ -44,3 +44,7 @@ The owner reads the board, not the agents' chats. Communicate proactively.
 ## Reference Examples
 For concrete formatting of notes, targeted routing, and pruning workflows, see [examples.md](./examples.md).
 - **Review cycle:** the reviewer lists all comments in one pass. After fixes, a re-review covers only commits added since the last review; no new comments on code already reviewed unless the new commits broke it. No comments means the reviewer approves and the coordinator merges. Authors never merge their own PR.
+
+- **Next-actions block:** the coordinator keeps a `## NEXT FOR EACH AGENT` block near the top of the board, one bullet per agent with exact commands and paths, so the owner never has to relay instructions. Every agent reads it at the start and after every finished step.
+
+- **Subject ids:** the board has a `## SUBJECTS` table (id = Jira key, `BOARD` for process). Every post heading and every element of a reply starts with the subject id, e.g. `### [AR-1355 | Codex | status | time]`. A new subject gets a table row first. This keeps posts deterministic and short.

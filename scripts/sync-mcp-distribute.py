@@ -75,7 +75,8 @@ def distribute_opencode(servers):
         # Build from the source entry, keeping only keys that belong in opencode.
         entry = {}
         if config.get("url"):
-            entry["type"] = config.get("type", "remote")
+            # OpenCode only accepts "local" or "remote"; other agents use "http".
+            entry["type"] = "remote"
             entry["url"] = config["url"]
         else:
             entry["type"] = "local"
@@ -112,6 +113,14 @@ def distribute_opencode(servers):
     return True
 
 
+CLAUDE_TYPES = {"http", "sse", "stdio"}
+
+
+def claude_type(url):
+    # Claude Code accepts only http/sse/stdio ("remote" is OpenCode-only).
+    return "sse" if url.rstrip("/").endswith("/sse") else "http"
+
+
 def distribute_claude(servers):
     path = os.path.expanduser("~/.claude.json")
     if not os.path.exists(path):
@@ -124,22 +133,29 @@ def distribute_claude(servers):
     existing = data.get("mcpServers", {})
     added, skipped = [], []
 
+    fixed = []
     for name, config in servers.items():
         if name in existing:
-            skipped.append(name)
+            # Repair only an invalid transport type; keep everything else.
+            entry = existing[name]
+            if entry.get("url") and entry.get("type") not in CLAUDE_TYPES:
+                entry["type"] = claude_type(entry["url"])
+                fixed.append(name)
+            else:
+                skipped.append(name)
             continue
         if not config.get("url"):
             print(f"  skip {name}: no url (Claude remote servers need one)")
             continue
         existing[name] = {
-            "type": config.get("type", "http"),
+            "type": claude_type(config["url"]),
             "url": config["url"],
         }
         added.append(name)
 
     data["mcpServers"] = existing
 
-    if not added:
+    if not added and not fixed:
         print(f"Claude: nothing to add ({len(skipped)} already present)")
         return True
 
@@ -147,7 +163,10 @@ def distribute_claude(servers):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
-    print(f"Claude: added {', '.join(added)}")
+    if added:
+        print(f"Claude: added {', '.join(added)}")
+    if fixed:
+        print(f"Claude: fixed invalid type on {', '.join(fixed)}")
     if skipped:
         print(f"Claude: left untouched {', '.join(skipped)}")
     return True

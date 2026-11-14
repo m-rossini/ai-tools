@@ -46,7 +46,7 @@
   "futebol-api": {
     "source": "opencode",
     "enabled": true,
-    "url": "https://futebol-mcp.orbisplace.co.uk/sse",
+    "url": "https://futebol-mcp.orbisplace.co.uk/mcp",
     "type": "remote",
     "sources": [
       "opencode",
